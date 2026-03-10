@@ -6800,19 +6800,52 @@ const AEROGERADORES = [
                 
                 <!-- Botão Limpar Dados -->
                 <div class="diag-card" style="background: #fff5f5; border: 2px solid #dc3545;">
-                    <h3 style="color: #dc3545;">🗑️ Limpar Todos os Dados</h3>
-                    <p style="margin: 10px 0; color: #666;">Apaga todas as inspeções e fotos. Esta ação não pode ser desfeita!</p>
-                    <button onclick="confirmarLimpeza()" style="
-                        background: #dc3545;
-                        color: white;
-                        border: none;
-                        padding: 12px 25px;
-                        border-radius: 8px;
-                        font-size: 16px;
-                        font-weight: bold;
-                        cursor: pointer;
-                        margin-top: 10px;
-                    ">🗑️ APAGAR TUDO</button>
+                    <h3 style="color: #dc3545;">🗑️ Limpar Dados por Aerogerador</h3>
+                    <p style="margin: 10px 0; color: #666;">Selecione os aerogeradores que deseja limpar (inspeções e fotos).</p>
+                    
+                    <div style="margin: 12px 0;">
+                        <div style="display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap;">
+                            <button onclick="diagSelectAll(true)" style="background:#6c757d;color:white;border:none;padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600;">Selecionar Todos</button>
+                            <button onclick="diagSelectAll(false)" style="background:#6c757d;color:white;border:none;padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600;">Desmarcar Todos</button>
+                        </div>
+                        <div id="diagAeroList" style="max-height:250px; overflow-y:auto; background:white; border:1px solid #ddd; border-radius:8px; padding:8px;">
+                            ${Object.entries(report.inspectionData.byAerogerador || {}).map(([aero, info]) => {
+                                const verificados = info.classifications['Verificado'] || 0;
+                                const comDefeito = info.count - verificados;
+                                return `<label style="display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:4px; cursor:pointer; font-size:13px; transition:background 0.15s;"
+                                    onmouseover="this.style.background='#f0f0f0'" onmouseout="this.style.background='transparent'">
+                                    <input type="checkbox" class="diagAeroCheck" value="${aero}" style="width:18px;height:18px;cursor:pointer;">
+                                    <strong>${aero}</strong>
+                                    <span style="color:#666;font-size:11px;">${info.count} comp.</span>
+                                    ${comDefeito > 0 ? `<span style="color:#dc3545;font-size:11px;font-weight:600;">${comDefeito} defeito${comDefeito>1?'s':''}</span>` : `<span style="color:#28a745;font-size:11px;">✓ OK</span>`}
+                                </label>`;
+                            }).join('')}
+                        </div>
+                    </div>
+                    
+                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
+                        <button onclick="confirmarLimpezaSeletiva()" style="
+                            background: #dc3545;
+                            color: white;
+                            border: none;
+                            padding: 12px 25px;
+                            border-radius: 8px;
+                            font-size: 14px;
+                            font-weight: bold;
+                            cursor: pointer;
+                        ">🗑️ APAGAR SELECIONADOS</button>
+                        
+                        <button onclick="confirmarLimpeza()" style="
+                            background: #6c757d;
+                            color: white;
+                            border: none;
+                            padding: 12px 25px;
+                            border-radius: 8px;
+                            font-size: 14px;
+                            font-weight: bold;
+                            cursor: pointer;
+                        ">🗑️ APAGAR TUDO</button>
+                    </div>
                 </div>
             `;
             
@@ -6822,6 +6855,93 @@ const AEROGERADORES = [
             console.log('Relatório de Diagnóstico:', report);
         }
         
+        function diagSelectAll(checked) {
+            document.querySelectorAll('.diagAeroCheck').forEach(cb => cb.checked = checked);
+        }
+
+        async function confirmarLimpezaSeletiva() {
+            const selected = [...document.querySelectorAll('.diagAeroCheck:checked')].map(cb => cb.value);
+            
+            if (!selected.length) {
+                alert('Selecione ao menos um aerogerador.');
+                return;
+            }
+            
+            const lista = selected.length > 5 
+                ? selected.slice(0, 5).join(', ') + ` e mais ${selected.length - 5}...`
+                : selected.join(', ');
+            
+            if (!confirm(`⚠️ ATENÇÃO!\n\nVai apagar todas as inspeções e fotos de:\n${lista}\n\n(${selected.length} aerogerador${selected.length > 1 ? 'es' : ''})\n\nEsta ação NÃO pode ser desfeita!`)) {
+                return;
+            }
+            
+            try {
+                let removedCount = 0;
+                let removedPhotos = 0;
+                
+                for (const aero of selected) {
+                    // Encontrar todas as chaves deste aerogerador
+                    const keysToRemove = Object.keys(inspectionData).filter(key => key.startsWith(aero + '_'));
+                    
+                    for (const key of keysToRemove) {
+                        // Remover inspeção do IndexedDB
+                        try {
+                            if (db) {
+                                await new Promise((resolve, reject) => {
+                                    const tx = db.transaction([STORE_INSPECTIONS], 'readwrite');
+                                    const req = tx.objectStore(STORE_INSPECTIONS).delete(key);
+                                    req.onsuccess = () => resolve();
+                                    req.onerror = (e) => reject(e.target.error);
+                                });
+                            }
+                        } catch (e) { console.warn('Erro ao remover inspeção do IDB:', key, e); }
+                        
+                        // Remover fotos do IndexedDB
+                        const photoKey = 'photos_' + key;
+                        try {
+                            if (db) {
+                                await new Promise((resolve, reject) => {
+                                    const tx = db.transaction([STORE_PHOTOS], 'readwrite');
+                                    const req = tx.objectStore(STORE_PHOTOS).delete(photoKey);
+                                    req.onsuccess = () => resolve();
+                                    req.onerror = (e) => reject(e.target.error);
+                                });
+                                removedPhotos++;
+                            }
+                        } catch (e) { console.warn('Erro ao remover foto do IDB:', photoKey, e); }
+                        
+                        // Remover fotos do localStorage (fallback)
+                        localStorage.removeItem(photoKey);
+                        
+                        // Remover da memória
+                        delete inspectionData[key];
+                        removedCount++;
+                    }
+                }
+                
+                // Atualizar progresso e árvore
+                updateProgress();
+                updateParqueProgress();
+                const aeroSelecionado = document.getElementById('aerogerador').value;
+                if (aeroSelecionado) {
+                    buildTree();
+                }
+                loadAerogeradores();
+                if (aeroSelecionado) {
+                    document.getElementById('aerogerador').value = aeroSelecionado;
+                }
+                
+                closeDiagnosticModal();
+                alert(`✅ Dados removidos!\n\n${removedCount} inspeções de ${selected.length} aerogerador${selected.length > 1 ? 'es' : ''} apagadas.`);
+                
+                console.log(`Limpeza seletiva: ${removedCount} inspeções removidas de ${selected.join(', ')}`);
+                
+            } catch (e) {
+                console.error('Erro na limpeza seletiva:', e);
+                alert('❌ Erro ao apagar dados: ' + e.message);
+            }
+        }
+
         async function confirmarLimpeza() {
             if (confirm('⚠️ TEM CERTEZA?\n\nIsso vai apagar TODAS as inspeções e fotos.\n\nEsta ação NÃO pode ser desfeita!')) {
                 if (confirm('🚨 ÚLTIMA CHANCE!\n\nClique OK para APAGAR TUDO.')) {
